@@ -1,0 +1,4 @@
+echo "bin/
+.vscode/
+*.exe
+*.log" > .gitignore
