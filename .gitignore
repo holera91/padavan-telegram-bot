@@ -2,4 +2,5 @@ echo "bin/
 .vscode/
 *.exe
 *.log" > .gitignore
-padavan-bot
+/padavan-bot
+*.bin
