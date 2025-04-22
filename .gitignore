@@ -4,3 +4,4 @@ echo "bin/
 *.log" > .gitignore
 /padavan-bot
 *.bin
+padavan-bot
