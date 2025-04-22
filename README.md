@@ -38,23 +38,14 @@ scp padavan-bot admin@192.168.1.171:/opt/home/admin/
 chmod +x /opt/home/admin/padavan-bot
 ```
 
-3. Создайте файл с переменными окружения:
-```bash
-echo "export TELEGRAM_BOT_TOKEN='ваш_токен'" > /opt/home/admin/bot_env
-```
 
 ## ⚙️ Настройка автозагрузки
 
 ### Через SSH
-Добавьте в `/etc/storage/post_wan_script.sh`:
+Добавьте в `vi /etc/storage/post_wan_script.sh`:
 ```bash
-source /opt/home/admin/bot_env
+export TELEGRAM_BOT_TOKEN="ваш токен"
 /opt/home/admin/padavan-bot > /dev/null 2>&1 &
-```
-
-Сохраните изменения:
-```bash
-mtd_storage.sh save
 ```
 
 ## 🛠 Управление ботом
