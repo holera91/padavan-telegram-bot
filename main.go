@@ -2,11 +2,15 @@ package main
 
 import (
 	"crypto/tls"
+	"encoding/json"
+	"flag"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -15,6 +19,13 @@ import (
 
 	"github.com/PuerkitoBio/goquery"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+)
+
+const (
+	// ID чату для відправки повідомлення
+	TARGET_CHAT_ID int64 = -4793969022
+	// Текст повідомлення для відправки
+	TARGET_MESSAGE = "Ваше повідомлення" // Замініть на ваш текст
 )
 
 type CurrencyRate struct {
@@ -30,12 +41,28 @@ type CachedRates struct {
 	mu          sync.RWMutex
 }
 
+type BillData struct {
+	PaymentDue     string `json:"Термін оплати"`
+	Amount         string `json:"Сума до сплати"`
+	PaymentPurpose string `json:"Призначення платежу"`
+}
+
 var (
 	cache CachedRates
 	loc   *time.Location
 )
 
 func main() {
+	// Parse command line arguments
+	sendFlag := flag.Bool("send", false, "Відправити повідомлення через бота")
+	flag.Parse()
+
+	// Якщо вказано команду відправки повідомлення
+	if *sendFlag {
+		sendMessageOnly()
+		return
+	}
+
 	// Initialize Kyiv timezone
 	initTimezone()
 
@@ -85,6 +112,7 @@ func main() {
 
 			// Log received message
 			log.Printf("[%s] %s", update.Message.From.UserName, update.Message.Text)
+			log.Printf("ID чату: %d", update.Message.Chat.ID)
 
 			// Handle commands
 			switch update.Message.Command() {
@@ -102,7 +130,8 @@ func main() {
 				sendRates(bot, update.Message.Chat.ID, currentRates)
 
 			default:
-				sendMessage(bot, update.Message.Chat.ID, "Використовуйте /rates для отримання курсів")
+				// Не відповідаємо на інші повідомлення
+				continue
 			}
 
 		case <-sigChan:
@@ -279,4 +308,82 @@ func isDaylightSavingTime(t time.Time) bool {
 	octoberTime = octoberTime.Add(4 * time.Hour)
 
 	return t.After(marchTime) && t.Before(octoberTime)
+}
+
+// Функція для отримання останнього рахунку
+func getLatestBill() (*BillData, error) {
+	files, err := ioutil.ReadDir(".")
+	if err != nil {
+		return nil, fmt.Errorf("помилка читання директорії: %v", err)
+	}
+
+	var jsonFiles []string
+	for _, file := range files {
+		if !file.IsDir() && strings.HasSuffix(file.Name(), ".json") {
+			jsonFiles = append(jsonFiles, file.Name())
+		}
+	}
+
+	if len(jsonFiles) == 0 {
+		return nil, fmt.Errorf("не знайдено JSON файлів")
+	}
+
+	// Сортуємо файли за датою модифікації (найновіший перший)
+	sort.Slice(jsonFiles, func(i, j int) bool {
+		infoI, _ := os.Stat(jsonFiles[i])
+		infoJ, _ := os.Stat(jsonFiles[j])
+		return infoI.ModTime().After(infoJ.ModTime())
+	})
+
+	// Читаємо найновіший файл
+	data, err := ioutil.ReadFile(jsonFiles[0])
+	if err != nil {
+		return nil, fmt.Errorf("помилка читання файлу %s: %v", jsonFiles[0], err)
+	}
+
+	var bill BillData
+	if err := json.Unmarshal(data, &bill); err != nil {
+		return nil, fmt.Errorf("помилка парсингу JSON: %v", err)
+	}
+
+	return &bill, nil
+}
+
+// Функція для формування повідомлення
+func formatMessage(bill *BillData) string {
+	return fmt.Sprintf("📢 Нагадування заплатити за Life!\n\n"+
+		"💰 До оплати: %s\n"+
+		"⏰ Оплатити потрібно: %s",
+		bill.Amount,
+		bill.PaymentDue)
+}
+
+// Функція для відправки повідомлення без запуску основного процесу бота
+func sendMessageOnly() {
+	botToken := os.Getenv("TELEGRAM_BOT_TOKEN")
+	if botToken == "" {
+		log.Fatal("Змінна середовища TELEGRAM_BOT_TOKEN не встановлена")
+	}
+
+	// Отримуємо останній рахунок
+	bill, err := getLatestBill()
+	if err != nil {
+		log.Fatalf("Помилка отримання рахунку: %v", err)
+	}
+
+	// Формуємо повідомлення
+	message := formatMessage(bill)
+
+	// Create bot with custom HTTP client
+	bot, err := tgbotapi.NewBotAPIWithClient(botToken, tgbotapi.APIEndpoint, &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	})
+	if err != nil {
+		log.Fatal("Помилка ініціалізації бота: ", err)
+	}
+
+	sendMessage(bot, TARGET_CHAT_ID, message)
+	log.Println("Повідомлення успішно відправлено")
 }
