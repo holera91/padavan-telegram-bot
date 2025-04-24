@@ -105,7 +105,13 @@ func main() {
 	for {
 		select {
 		case update := <-updates:
-			if update.Message == nil {
+			if update.Message == nil && update.CallbackQuery == nil {
+				continue
+			}
+
+			// Обробка callback запитів
+			if update.CallbackQuery != nil {
+				handleCallback(bot, update.CallbackQuery)
 				continue
 			}
 
@@ -118,7 +124,7 @@ func main() {
 			case "start":
 				sendMessage(bot, update.Message.Chat.ID,
 					"👋 Вітаю! Цей бот показує актуальні курси валют.\n\n"+
-						"Доступна команда:\n/rates - поточні курси")
+						"Доступні команди:\n/rates - поточні курси\n/invoice - переглянути рахунки")
 
 			case "rates":
 				currentRates := getCurrentRates()
@@ -128,9 +134,31 @@ func main() {
 				}
 				sendRates(bot, update.Message.Chat.ID, currentRates)
 
+			case "invoice":
+				msg := createInvoiceMenu(update.Message.Chat.ID)
+				bot.Send(msg)
+
 			default:
-				// Не відповідаємо на інші повідомлення
-				continue
+				// Перевіряємо чи це відповідь на запит місяця
+				parts := strings.Fields(update.Message.Text)
+				if len(parts) > 0 {
+					month := convertMonthToEnglish(parts[0])
+					year := 0
+					if len(parts) > 1 {
+						year, _ = strconv.Atoi(parts[1])
+					}
+
+					bill, err := getBillForMonth(month, year)
+					if err != nil {
+						sendMessage(bot, update.Message.Chat.ID, fmt.Sprintf("❌ Помилка: %v", err))
+						continue
+					}
+					message := formatMessage(bill)
+					sendMessage(bot, update.Message.Chat.ID, message)
+				} else {
+					// Не відповідаємо на інші повідомлення
+					continue
+				}
 			}
 
 		case <-sigChan:
@@ -402,4 +430,116 @@ func sendMessageOnly() {
 
 	sendMessage(bot, chatID, message)
 	log.Println("Повідомлення успішно відправлено")
+}
+
+// Функція для отримання рахунку за конкретний місяць
+func getBillForMonth(month string, year int) (*BillData, error) {
+	invoiceDir := "/media/xi/life-invoice"
+
+	// Перевіряємо чи існує директорія
+	if _, err := os.Stat(invoiceDir); os.IsNotExist(err) {
+		return nil, fmt.Errorf("директорія %s не існує", invoiceDir)
+	}
+
+	files, err := ioutil.ReadDir(invoiceDir)
+	if err != nil {
+		return nil, fmt.Errorf("помилка читання директорії %s: %v", invoiceDir, err)
+	}
+
+	var targetFile string
+	for _, file := range files {
+		if !file.IsDir() && strings.HasSuffix(file.Name(), ".json") {
+			fileName := strings.ToLower(file.Name())
+			if strings.Contains(fileName, strings.ToLower(month)) &&
+				(year == 0 || strings.Contains(fileName, strconv.Itoa(year))) {
+				targetFile = filepath.Join(invoiceDir, file.Name())
+				break
+			}
+		}
+	}
+
+	if targetFile == "" {
+		return nil, fmt.Errorf("не знайдено рахунку за %s %d", month, year)
+	}
+
+	data, err := ioutil.ReadFile(targetFile)
+	if err != nil {
+		return nil, fmt.Errorf("помилка читання файлу %s: %v", targetFile, err)
+	}
+
+	var bill BillData
+	if err := json.Unmarshal(data, &bill); err != nil {
+		return nil, fmt.Errorf("помилка парсингу JSON: %v", err)
+	}
+
+	return &bill, nil
+}
+
+// Функція для створення меню вибору
+func createInvoiceMenu(chatID int64) tgbotapi.MessageConfig {
+	msg := tgbotapi.NewMessage(chatID, "Оберіть опцію:")
+	msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("За цей місяць", "invoice_current"),
+			tgbotapi.NewInlineKeyboardButtonData("Вкажіть місяць", "invoice_custom"),
+		),
+	)
+	return msg
+}
+
+// Функція для конвертації української назви місяця в англійську
+func convertMonthToEnglish(month string) string {
+	monthMap := map[string]string{
+		"січень":   "January",
+		"лютий":    "February",
+		"березень": "March",
+		"квітень":  "April",
+		"травень":  "May",
+		"червень":  "June",
+		"липень":   "July",
+		"серпень":  "August",
+		"вересень": "September",
+		"жовтень":  "October",
+		"листопад": "November",
+		"грудень":  "December",
+		// Додаємо варіанти з великої літери
+		"Січень":   "January",
+		"Лютий":    "February",
+		"Березень": "March",
+		"Квітень":  "April",
+		"Травень":  "May",
+		"Червень":  "June",
+		"Липень":   "July",
+		"Серпень":  "August",
+		"Вересень": "September",
+		"Жовтень":  "October",
+		"Листопад": "November",
+		"Грудень":  "December",
+	}
+
+	if englishMonth, ok := monthMap[strings.ToLower(month)]; ok {
+		return englishMonth
+	}
+	return month // Якщо місяць не знайдено, повертаємо оригінальне значення
+}
+
+// Функція для обробки callback запитів
+func handleCallback(bot *tgbotapi.BotAPI, callback *tgbotapi.CallbackQuery) {
+	switch callback.Data {
+	case "invoice_current":
+		bill, err := getLatestBill()
+		if err != nil {
+			sendMessage(bot, callback.Message.Chat.ID, fmt.Sprintf("❌ Помилка: %v", err))
+			return
+		}
+		message := formatMessage(bill)
+		sendMessage(bot, callback.Message.Chat.ID, message)
+
+	case "invoice_custom":
+		msg := tgbotapi.NewMessage(callback.Message.Chat.ID,
+			"Введіть місяць у форматі:\n"+
+				"- Тільки місяць (наприклад: Березень)\n"+
+				"- Місяць та рік (наприклад: Березень 2025)")
+		bot.Send(msg)
+	}
 }
