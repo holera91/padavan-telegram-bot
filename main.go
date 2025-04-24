@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,8 +23,6 @@ import (
 )
 
 const (
-	// ID чату для відправки повідомлення
-	TARGET_CHAT_ID int64 = -4793969022
 	// Текст повідомлення для відправки
 	TARGET_MESSAGE = "Ваше повідомлення" // Замініть на ваш текст
 )
@@ -312,20 +311,27 @@ func isDaylightSavingTime(t time.Time) bool {
 
 // Функція для отримання останнього рахунку
 func getLatestBill() (*BillData, error) {
-	files, err := ioutil.ReadDir(".")
+	invoiceDir := "/media/xi/life-invoice"
+
+	// Перевіряємо чи існує директорія
+	if _, err := os.Stat(invoiceDir); os.IsNotExist(err) {
+		return nil, fmt.Errorf("директорія %s не існує", invoiceDir)
+	}
+
+	files, err := ioutil.ReadDir(invoiceDir)
 	if err != nil {
-		return nil, fmt.Errorf("помилка читання директорії: %v", err)
+		return nil, fmt.Errorf("помилка читання директорії %s: %v", invoiceDir, err)
 	}
 
 	var jsonFiles []string
 	for _, file := range files {
 		if !file.IsDir() && strings.HasSuffix(file.Name(), ".json") {
-			jsonFiles = append(jsonFiles, file.Name())
+			jsonFiles = append(jsonFiles, filepath.Join(invoiceDir, file.Name()))
 		}
 	}
 
 	if len(jsonFiles) == 0 {
-		return nil, fmt.Errorf("не знайдено JSON файлів")
+		return nil, fmt.Errorf("не знайдено JSON файлів в директорії %s", invoiceDir)
 	}
 
 	// Сортуємо файли за датою модифікації (найновіший перший)
@@ -365,6 +371,16 @@ func sendMessageOnly() {
 		log.Fatal("Змінна середовища TELEGRAM_BOT_TOKEN не встановлена")
 	}
 
+	chatIDStr := os.Getenv("TARGET_CHAT_ID")
+	if chatIDStr == "" {
+		log.Fatal("Змінна середовища TARGET_CHAT_ID не встановлена")
+	}
+
+	chatID, err := strconv.ParseInt(chatIDStr, 10, 64)
+	if err != nil {
+		log.Fatalf("Помилка парсингу ID чату: %v", err)
+	}
+
 	// Отримуємо останній рахунок
 	bill, err := getLatestBill()
 	if err != nil {
@@ -384,6 +400,6 @@ func sendMessageOnly() {
 		log.Fatal("Помилка ініціалізації бота: ", err)
 	}
 
-	sendMessage(bot, TARGET_CHAT_ID, message)
+	sendMessage(bot, chatID, message)
 	log.Println("Повідомлення успішно відправлено")
 }
